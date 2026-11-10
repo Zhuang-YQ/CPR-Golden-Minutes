@@ -1,0 +1,21 @@
+body {
+  background: #1a1c22;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  margin: 0;
+  font-family: "Microsoft YaHei", sans-serif;
+}
+#wrap { text-align: center; }
+canvas {
+  width: min(960px, 96vw);
+  height: auto;
+  aspect-ratio: 3 / 2;
+  background: #0d0f16;
+  border: 4px solid #2e3448;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0,0,0,.55);
+}
+.foot { color: #6b7280; font-size: 13px; margin-top: 10px; }
