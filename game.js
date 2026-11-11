@@ -55,6 +55,50 @@ function computeScore(res) {
            total: total, grade: grade };
 }
 
+/* ---------- 纯函数：成绩复盘统计（可测，不参与评分） ---------- */
+// intervals：相邻按压的真实间隔（ms）；judgments：每次按压的判定结果
+function buildReview(intervals, judgments) {
+  var n = intervals.length, sum = 0, gold = 0, fast = 0, slow = 0;
+  for (var i = 0; i < n; i++) {
+    var ms = intervals[i];
+    sum += ms;
+    if (ms >= CONFIG.PERFECT_MIN && ms <= CONFIG.PERFECT_MAX) gold++;
+    else if (ms < CONFIG.PERFECT_MIN) fast++;
+    else slow++;
+  }
+  var avgMs  = n ? Math.round(sum / n) : 0;
+  var avgBpm = n ? Math.round(60000 / avgMs) : 0;
+  var goldRate = n ? Math.round(gold * 100 / n) : 0;
+
+  // 按判定数组切两轮（每轮 PRESSES_PER_ROUND 次，含起手基准拍）
+  var per = CONFIG.PRESSES_PER_ROUND;
+  function rate(list) {
+    if (!list.length) return 0;
+    var p = 0;
+    for (var j = 0; j < list.length; j++) if (list[j] === 'PERFECT') p++;
+    return Math.round(p * 100 / list.length);
+  }
+  var r1 = rate(judgments.slice(0, per));
+  var r2 = rate(judgments.slice(per, per * 2));
+  var trend = r2 > r1 + 5 ? 'up' : r2 < r1 - 5 ? 'down' : 'flat';
+
+  var advice;
+  if (!n) advice = '暂无按压数据';
+  else if (avgMs < CONFIG.PERFECT_MIN) advice = '整体偏快：下次跟着哔声，稍微放慢一点';
+  else if (avgMs > CONFIG.PERFECT_MAX) advice = '整体偏慢：稍微加快，保持 100～120 次／分';
+  else if (goldRate < 70) advice = '平均节奏达标，但波动偏大：试着让每次间隔更均匀';
+  else advice = '节奏稳定，接近指南要求，继续保持！';
+
+  return {
+    count: n, avgMs: avgMs, avgBpm: avgBpm,
+    gold: gold, goldRate: goldRate, fast: fast, slow: slow,
+    perfect: judgments.filter(function (j) { return j === 'PERFECT'; }).length,
+    good:    judgments.filter(function (j) { return j === 'GOOD';    }).length,
+    miss:    judgments.filter(function (j) { return j === 'MISS';    }).length,
+    r1: r1, r2: r2, trend: trend, advice: advice
+  };
+}
+
 /* ---------- 游戏逻辑（状态机，可无头驱动） ---------- */
 function CPRGame() { this.reset(); }
 
@@ -63,6 +107,7 @@ CPRGame.prototype.reset = function () {
   this.clock = 0;
   this.round = 1;
   this.judgments = [];
+  this.intervals = [];            // 每次按压的真实间隔（ms），供成绩复盘统计
   this.pressCount = 0;
   this.lastPressAt = null;
   this.blowCount = 0;
@@ -91,7 +136,7 @@ CPRGame.prototype._setHint = function () {
     P3: '真实急救：按压频率 100~120 次/分。跟着节拍按空格，节奏准才有效！',
     P4: '真实急救：按压 30 次后吹气 2 次，每次约 1 秒，看到胸廓起伏即可。',
     P5: '真实急救：AED 全程语音提示——开机、贴片、分析电击时任何人不得接触患者。',
-    RESULT: '按 R 重新挑战 · 建议每 1~2 年复训一次',
+    RESULT: '按 D 切换数据复盘 / 成绩明细 · 按 R 重新挑战 · 建议每 1～2 年复训一次',
   };
   this.hint = h[this.phase] || '';
 };
@@ -171,7 +216,9 @@ CPRGame.prototype.handleKey = function (key, ts, isDown) {
         this.judgments.push('PERFECT');
         this._flash('基准拍', 'good');
       } else {
-        var j = classifyInterval(t - this.lastPressAt);
+        var dt = t - this.lastPressAt;
+        this.intervals.push(dt);
+        var j = classifyInterval(dt);
         this.judgments.push(j);
         this._flash(j === 'PERFECT' ? 'PERFECT' : j === 'GOOD' ? 'GOOD' : '偏了！',
                     j === 'MISS' ? 'miss' : 'good');
@@ -262,9 +309,16 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   function stopMetro() { if (metroTimer) { clearInterval(metroTimer); metroTimer = null; } }
 
   var KEYMAP = { 'Enter': 'Enter', 'f': 'F', 'F': 'F', ' ': 'Space',
-                 'b': 'B', 'B': 'B', '1': '1', '2': '2', 'r': 'R', 'R': 'R' };
+                 'b': 'B', 'B': 'B', '1': '1', '2': '2', 'r': 'R', 'R': 'R',
+                 'd': 'D', 'D': 'D' };
   /* 物理键盘与触屏按键共用同一条分发路径，保证行为完全一致 */
   function dispatchKey(k, isDown) {
+    /* 结算页 D：在「数据复盘 / 成绩明细」之间切换（纯渲染层，不触碰评分） */
+    if (isDown && k === 'D' && game.phase === 'RESULT') {
+      resultView = resultView === 'review' ? 'detail' : 'review';
+      updateTouchbar();
+      return;
+    }
     var before = game.phase;
     game.handleKey(k, performance.now(), isDown);
     if (isDown && (k === 'F' || k === 'Enter' || k === '1' || k === '2' || k === 'Space')) beep(660, 0.03, 0.03);
@@ -294,7 +348,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     P3:     ['Space'],
     P4:     ['B'],
     P5:     ['Enter', '1', '2', 'Space'],
-    RESULT: ['R']
+    RESULT: ['D', 'R']
   };
   if (IS_TOUCH && touchBar) {
     document.body.classList.add('touch');
@@ -316,7 +370,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     if (!IS_TOUCH || !touchBar) return;
     var keys = PHASE_KEYS[game.phase] || [];
     Array.prototype.forEach.call(tbtns, function (btn) {
-      btn.style.display = keys.indexOf(btn.getAttribute('data-key')) !== -1 ? '' : 'none';
+      var key = btn.getAttribute('data-key');
+      btn.style.display = keys.indexOf(key) !== -1 ? '' : 'none';
+      if (key === 'D') btn.textContent = resultView === 'review' ? '成绩明细 D' : '数据复盘 D';
     });
   }
 
@@ -450,6 +506,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   var toast = null;           // 里程碑鼓励飘字 {at, text}
   var prevPress = 0;
   var lastJudgeAt = null, lastInterval = null;   // 用于「太快/太慢」指导
+  var resultView = 'review';                     // 结算页默认展示数据复盘（按 D 切成绩明细）
 
   /* ---------- 各阶段画面 ---------- */
   function drawTitle() {
@@ -684,10 +741,83 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     txt('操作错误 ' + game.aedErrors + ' 次', W / 2, 258, 10.5, PALETTE.dim);
   }
 
+  /* 结算页默认「数据复盘」，按 D 切换到「成绩明细」——亮点第一眼就可见 */
   function drawResult() {
     if (!game.result) return;
+    if (resultView === 'detail') drawResultDetail();
+    else drawResultReview();
+  }
+
+  function drawResultReview() {
+    var sc = game.result.score;
+    var rv = buildReview(game.intervals, game.judgments);
+    var gc = sc.grade === 'S' ? PALETTE.gold : sc.grade === 'A' ? PALETTE.green
+           : sc.grade === 'B' ? PALETTE.blue : PALETTE.red;
+    var MSG = {
+      S: '自主循环恢复（ROSC）· 伤员恢复呼吸！',
+      A: '抢救成功 · 伤员恢复了呼吸！',
+      B: '抢救有效 · 伤员恢复部分循环，等待专业救援',
+      C: '抢救不足 · 伤员仍在危险中，再来一次！'
+    };
+    txt('抢救结束 · 数据复盘', W / 2, 48, 17, PALETTE.text);
+    txt('按 D 看成绩明细', W - 14, 48, 9.5, PALETTE.dim, 'right', false);
+
+    /* 等级徽章 + 总分 */
+    ctx.save(); ctx.shadowColor = gc; ctx.shadowBlur = 18;
+    ctx.beginPath(); ctx.arc(60, 92, 32, 0, Math.PI * 2);
+    ctx.strokeStyle = gc; ctx.lineWidth = 3; ctx.stroke();
+    ctx.restore();
+    txt(sc.grade, 60, 104, 36, gc);
+    txt('总分', 110, 76, 10, PALETTE.dim, 'left', false);
+    txt(sc.total + ' / 200', 110, 102, 24, gc, 'left');
+    txt('最佳连准 ×' + comboBest, 110, 120, 10, PALETTE.dim, 'left', false);
+    txt(MSG[sc.grade] || '', W / 2, 142, 11, gc);
+
+    /* 三张关键数据卡 */
+    var cards = [
+      ['平均频率', String(rv.avgBpm), '次/分 · 间隔 ' + rv.avgMs + 'ms', PALETTE.gold],
+      ['黄金区间', rv.goldRate + '%', '落在 500～600ms', PALETTE.green],
+      ['最佳连准', '×' + comboBest, '连续 PERFECT', PALETTE.blue]
+    ];
+    for (var i = 0; i < 3; i++) {
+      var x = 18 + i * 152;
+      panel(x, 156, 140, 54, PALETTE.panel, PALETTE.line);
+      txt(cards[i][0], x + 10, 172, 9.5, PALETTE.dim, 'left', false);
+      txt(cards[i][1], x + 10, 196, 21, cards[i][3], 'left');
+      txt(cards[i][2], x + 10, 206, 8.5, PALETTE.faint, 'left', false);
+    }
+
+    /* 判定分布堆叠条 */
+    txt('节奏分布', 18, 230, 10, PALETTE.dim, 'left', false);
+    var bx = 84, bw = 300, by = 220, bh = 10;
+    var tot = rv.perfect + rv.good + rv.miss || 1;
+    ctx.fillStyle = PALETTE.line;
+    ctx.fillRect(bx, by, bw, bh);
+    var px = bx;
+    var segs = [[rv.perfect, PALETTE.green], [rv.good, PALETTE.blue], [rv.miss, PALETTE.red]];
+    for (var s = 0; s < 3; s++) {
+      var sw = bw * segs[s][0] / tot;
+      ctx.fillStyle = segs[s][1];
+      ctx.fillRect(px, by, sw, bh);
+      px += sw;
+    }
+    txt('PERFECT ' + rv.perfect + ' · GOOD ' + rv.good + ' · 偏了 ' + rv.miss,
+        84, 244, 9, PALETTE.faint, 'left', false);
+
+    /* 两轮趋势 + 个性化建议 */
+    var trendTxt = '第 1 轮 ' + rv.r1 + '%  →  第 2 轮 ' + rv.r2 + '% · ';
+    if (rv.trend === 'up') trendTxt += '后半程更稳';
+    else if (rv.trend === 'down') trendTxt += '后半程掉节奏，注意体力';
+    else trendTxt += '两轮节奏稳定';
+    txt(trendTxt, W / 2, 262, 10.5, PALETTE.blue, 'center', false);
+    txt(rv.advice, W / 2, 280, 11, PALETTE.gold);
+  }
+
+  function drawResultDetail() {
+    if (!game.result) return;
     var sc = game.result.score, r = game.result;
-    txt('抢救结束', W / 2, 50, 18, PALETTE.text);
+    txt('抢救结束 · 成绩明细', W / 2, 50, 18, PALETTE.text);
+    txt('按 D 回数据复盘', W - 14, 50, 9.5, PALETTE.dim, 'right', false);
     /* 结局叙事：等级决定伤员的命运 */
     var GRADE_MSG = {
       S: '自主循环恢复（ROSC）· 伤员恢复呼吸！',
@@ -715,20 +845,15 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
       ['反应', sc.reaction, 30, PALETTE.red],
     ];
     for (var i = 0; i < 4; i++) {
-      var y = 178 + i * 22;
+      var y = 174 + i * 20;
       txt(items[i][0], 96, y + 4, 11, PALETTE.dim, 'right');
       bar(110, y, 200, 9, items[i][1] / items[i][2], items[i][3]);
       txt(items[i][1] + '/' + items[i][2], 326, y + 4, 10.5, PALETTE.text, 'left');
     }
-    txt('总分 ' + sc.total + ' / 200', W / 2, 276, 16, gcol);
-    var pulse = 0.5 + 0.5 * Math.sin(Date.now() / 350);
-    ctx.globalAlpha = 0.5 + 0.5 * pulse;
-    keycap(W / 2 - 18, 300 - 14, 'R', true);
-    txt('重新挑战', W / 2 + 30, 288, 12, PALETTE.gold);
-    ctx.globalAlpha = 1;
-    // 统计小字
+    // 统计小字与总分上移，避开底部提示条（原键帽会压住提示文字）
     txt('PERFECT ' + r.perfect + ' · GOOD ' + r.good + ' · 偏差 ' + r.miss +
-        ' · 有效吹气 ' + r.blowValid + '/4 · AED 错误 ' + r.aedErrors, W / 2, 262, 9.5, PALETTE.faint, 'center', false);
+        ' · 有效吹气 ' + r.blowValid + '/4 · AED 错误 ' + r.aedErrors, W / 2, 252, 9.5, PALETTE.faint, 'center', false);
+    txt('总分 ' + sc.total + ' / 200   ·   按 R 重新挑战', W / 2, 276, 15, gcol);
   }
 
   function hintBar() {
@@ -797,7 +922,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     if (acc > 200) acc = 200;
     while (acc >= CONFIG.STEP) { game.update(CONFIG.STEP); acc -= CONFIG.STEP; }
     if (game.phase !== lastPhase) {
-      if (game.phase === 'TITLE') { comboBest = 0; toast = null; prevPress = 0; prevJudg = 0; lastJudgeAt = null; lastInterval = null; }
+      if (game.phase === 'TITLE') { comboBest = 0; toast = null; prevPress = 0; prevJudg = 0; lastJudgeAt = null; lastInterval = null; resultView = 'review'; }
       lastPhase = game.phase;
       updateTouchbar();
     }
@@ -818,5 +943,6 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   requestAnimationFrame(frame);
 
 } else if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { CPRGame: CPRGame, classifyInterval: classifyInterval, computeScore: computeScore, CONFIG: CONFIG, PALETTE: PALETTE };
+  module.exports = { CPRGame: CPRGame, classifyInterval: classifyInterval, computeScore: computeScore,
+                     buildReview: buildReview, CONFIG: CONFIG, PALETTE: PALETTE };
 }

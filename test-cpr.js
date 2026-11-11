@@ -157,6 +157,37 @@ ok(totalPresses === 60 && g4.judgments.length === 60, '两轮共 60 次按压、
 ok(totalBlows === 4 && g4.blowCount === 4, '两轮共 4 次吹气（30:2 × 2 轮）');
 ok(g4.phase === 'P5', '两轮完成 → 进入 AED 阶段');
 
+/* ---------- 7. 成绩复盘统计（纯函数，不参与评分） ---------- */
+section('7. 成绩复盘统计（PRD 四-7）');
+var buildReview = G.buildReview;
+function rep(v, n) { var a = []; for (var i = 0; i < n; i++) a.push(v); return a; }
+
+var rv0 = buildReview([], []);
+ok(rv0.count === 0 && rv0.avgBpm === 0 && rv0.goldRate === 0 && rv0.advice === '暂无按压数据',
+   '空数据安全：不产生 NaN，给出提示文案');
+
+var rv1 = buildReview(rep(545, 58), rep('PERFECT', 60));
+ok(rv1.avgMs === 545 && rv1.avgBpm === 110 && rv1.goldRate === 100,
+   '全 545ms → 平均 110 次/分、黄金区间 100%');
+ok(rv1.fast === 0 && rv1.slow === 0, '全 545ms → 无偏快 / 偏慢');
+
+var rv2 = buildReview(rep(400, 10), rep('MISS', 10));
+ok(rv2.avgBpm === 150 && rv2.goldRate === 0 && rv2.fast === 10 && rv2.advice.indexOf('偏快') !== -1,
+   '全 400ms → 150 次/分、判定偏快并给放缓建议');
+
+var rv3 = buildReview(rep(700, 10), rep('MISS', 10));
+ok(rv3.slow === 10 && rv3.advice.indexOf('偏慢') !== -1, '全 700ms → 判定偏慢并给加快建议');
+
+var rv4 = buildReview(rep(545, 5).concat(rep(700, 5)), rep('PERFECT', 5).concat(rep('MISS', 5)));
+ok(rv4.goldRate === 50 && rv4.avgMs === 623, '混合间隔 → 黄金区间 50%、平均 623ms');
+
+var rv5 = buildReview(rep(545, 58), rep('MISS', 30).concat(rep('PERFECT', 30)));
+ok(rv5.r1 === 0 && rv5.r2 === 100 && rv5.trend === 'up', '两轮趋势：第 2 轮明显更稳 → up');
+
+var rv6 = buildReview(g4.intervals, g4.judgments);
+ok(g4.intervals.length === 58 && rv6.avgBpm === 110 && rv6.goldRate === 100 && rv6.perfect === 60,
+   '完整一局 60 次按压 → 58 条间隔，复盘数据与评分一致');
+
 /* ---------- 汇总 ---------- */
 console.log('\n========================================');
 console.log('通过 ' + pass + ' / ' + (pass + fail) + (fail === 0 ? ' —— 全部 PASS' : ' —— 存在失败项'));
