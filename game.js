@@ -449,10 +449,11 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   var comboBest = 0;          // 本局最佳连准（渲染层统计，不参与评分）
   var toast = null;           // 里程碑鼓励飘字 {at, text}
   var prevPress = 0;
+  var lastJudgeAt = null, lastInterval = null;   // 用于「太快/太慢」指导
 
   /* ---------- 各阶段画面 ---------- */
   function drawTitle() {
-    ecg(140, 34, 1.2, PALETTE.ecg, .9);
+    ecg(88, 14, 1.2, PALETTE.ecgDim, .35);   // 淡背景心电波，避让引导文字
     // 心跳圆点扫过
     var t0 = Date.now() / (1000 / 1.2) % 4 / 4;
     txt('黄金四分钟', W / 2, 84, 42, PALETTE.red, 'center');
@@ -461,18 +462,18 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     ctx.restore();
     txt('怎么玩：跟着屏幕提示，依次完成 5 步急救，把伤员救回来', W / 2, 136, 11.5, PALETTE.text);
     txt('电脑按键盘 · 手机点屏幕下方按钮', W / 2, 152, 10, PALETTE.dim, 'center', false);
-    txt('心脏骤停后，每延迟 1 分钟，存活率下降 7%~10%', W / 2, 172, 11.5, PALETTE.dim);
-    // 三步口诀
+    txt('每延迟 1 分钟存活率降 7~10% · 目标：连准 ×10 冲 S 级', W / 2, 172, 11, PALETTE.dim);
+    // 三步口诀：卡片加宽 + 文字左对齐，杜绝出框
     var steps = [['叫', '判断 · 呼救', '3 秒内完成'], ['压', '按压 100~120', '每轮 30 次'], ['电', 'AED 除颤', '开机→贴片→电击']];
     for (var i = 0; i < 3; i++) {
-      var x = W / 2 - 132 + i * 132;
-      panel(x, 186, 108, 52, PALETTE.panel, PALETTE.line);
-      ctx.beginPath(); ctx.arc(x + 30, 212, 15, 0, Math.PI * 2);
+      var x = 18 + i * 152;
+      panel(x, 186, 140, 52, PALETTE.panel, PALETTE.line);
+      ctx.beginPath(); ctx.arc(x + 24, 212, 14, 0, Math.PI * 2);
       ctx.fillStyle = [PALETTE.blue, PALETTE.red, PALETTE.gold][i];
       ctx.fill();
-      txt(steps[i][0], x + 30, 217, 16, PALETTE.white);
-      txt(steps[i][1], x + 74, 209, 10, PALETTE.text, 'center');
-      txt(steps[i][2], x + 74, 224, 8.5, PALETTE.dim, 'center', false);
+      txt(steps[i][0], x + 24, 217, 15, PALETTE.white);
+      txt(steps[i][1], x + 46, 209, 10, PALETTE.text, 'left');
+      txt(steps[i][2], x + 46, 224, 9, PALETTE.dim, 'left', false);
     }
     var pulse = 0.5 + 0.5 * Math.sin(Date.now() / 350);
     ctx.globalAlpha = 0.55 + 0.45 * pulse;
@@ -591,22 +592,32 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     txt(done + ' / ' + total + ' 次', cx, 214, 13, PALETTE.text);
     txt('跟着哔声节拍按', cx, 246, 12.5, PALETTE.dim, 'center', false);
     keycap(cx - 22, 262, '空格', true);
-    // 判定飘字（带缩放动画）
+    // 每一次按压都给大号即时反馈 + 明确的快慢指导（新手第一下就能看见）
     if (game.judgments.length && game.flash) {
       var f = game.flash;
-      var scale = 1 + Math.max(0, 1 - (game.clock - f.at) / 200) * 0.6;
-      ctx.save();
-      ctx.translate(cx + 96, cy - 18);
-      ctx.scale(scale, scale);
+      var age = game.clock - f.at;
       var lj = game.judgments[game.judgments.length - 1];
-      var col = lj === 'PERFECT' ? PALETTE.green : lj === 'GOOD' ? PALETTE.blue : PALETTE.red;
-      txt(lj, 0, 0, 13, col);
+      var scale = 1 + Math.max(0, 1 - age / 240) * 0.35;
+      var jcol = lj === 'PERFECT' ? PALETTE.green : lj === 'GOOD' ? PALETTE.blue : PALETTE.red;
+      var tip;
+      if (lastInterval === null) tip = '跟着哔声按';
+      else if (lj === 'PERFECT') tip = '节奏完美！';
+      else if (lj === 'GOOD') tip = lastInterval < CONFIG.PERFECT_MIN ? '稍快了' : '稍慢了';
+      else tip = lastInterval < CONFIG.GOOD_MIN ? '太快了！慢一点' : '太慢了！快一点';
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, 1 - age / 900);
+      ctx.translate(cx + 108, cy - 8);
+      ctx.scale(scale, scale);
+      txt(lj === 'PERFECT' ? 'PERFECT!' : lj === 'GOOD' ? 'GOOD' : '偏了', 0, 0, 20, jcol);
+      txt(tip, 0, 18, 10.5, PALETTE.dim, 'center', false);
       ctx.restore();
     }
-    // 判定变化时喷粒子
+    // 判定变化时喷粒子 + 记录本次间隔
     if (game.judgments.length !== prevJudg) {
       var j = game.judgments[game.judgments.length - 1];
       var c = j === 'PERFECT' ? PALETTE.green : j === 'GOOD' ? PALETTE.blue : PALETTE.red;
+      lastInterval = lastJudgeAt === null ? null : game.lastPressAt - lastJudgeAt;
+      lastJudgeAt = game.lastPressAt;
       spawnBurst(cx, cy, c, j === 'MISS' ? 5 : 12);
       prevJudg = game.judgments.length;
     }
@@ -733,8 +744,18 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     ctx.font = '10.5px "Microsoft YaHei", sans-serif';
     ctx.fillStyle = PALETTE.text;
     var h = game.hint;
-    ctx.fillText(h.slice(0, 38), 44, H - 20);
-    if (h.length > 38) ctx.fillText(h.slice(38, 76), 44, H - 7);
+    /* 右侧留出 100px 显示抢救倒计时与存活率，提示文字相应缩短换行 */
+    ctx.fillText(h.slice(0, 28), 44, H - 20);
+    if (h.length > 28) ctx.fillText(h.slice(28, 56), 44, H - 7);
+    if (game.phase !== 'TITLE' && game.phase !== 'RESULT') {
+      var left = Math.max(0, 240000 - game.clock);
+      var mm = Math.floor(left / 60000), ss = Math.floor((left % 60000) / 1000);
+      txt('抢救剩余 ' + mm + ':' + (ss < 10 ? '0' : '') + ss, W - 10, H - 20, 10,
+          left < 60000 ? PALETTE.red : PALETTE.gold, 'right', false);
+      var rate = Math.max(10, Math.round(100 - (game.clock / 240000) * 70));
+      txt('存活率 ' + rate + '%', W - 10, H - 7, 9.5,
+          rate > 50 ? PALETTE.green : PALETTE.red, 'right', false);
+    }
   }
 
   function statusBar() {
@@ -776,7 +797,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     if (acc > 200) acc = 200;
     while (acc >= CONFIG.STEP) { game.update(CONFIG.STEP); acc -= CONFIG.STEP; }
     if (game.phase !== lastPhase) {
-      if (game.phase === 'TITLE') { comboBest = 0; toast = null; prevPress = 0; prevJudg = 0; }
+      if (game.phase === 'TITLE') { comboBest = 0; toast = null; prevPress = 0; prevJudg = 0; lastJudgeAt = null; lastInterval = null; }
       lastPhase = game.phase;
       updateTouchbar();
     }
