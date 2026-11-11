@@ -263,20 +263,62 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 
   var KEYMAP = { 'Enter': 'Enter', 'f': 'F', 'F': 'F', ' ': 'Space',
                  'b': 'B', 'B': 'B', '1': '1', '2': '2', 'r': 'R', 'R': 'R' };
+  /* 物理键盘与触屏按键共用同一条分发路径，保证行为完全一致 */
+  function dispatchKey(k, isDown) {
+    var before = game.phase;
+    game.handleKey(k, performance.now(), isDown);
+    if (isDown && (k === 'F' || k === 'Enter' || k === '1' || k === '2' || k === 'Space')) beep(660, 0.03, 0.03);
+    if (game.phase === 'P3' && before !== 'P3') startMetro();
+    if (before === 'P3' && game.phase !== 'P3') stopMetro();
+  }
   document.addEventListener('keydown', function (e) {
     if (e.repeat) return;
     var k = KEYMAP[e.key];
     if (!k) return;
     e.preventDefault();
-    var before = game.phase;
-    game.handleKey(k, performance.now(), true);
-    if (k === 'F' || k === 'Enter' || k === '1' || k === '2' || k === 'Space') beep(660, 0.03, 0.03);
-    if (game.phase === 'P3' && before !== 'P3') startMetro();
-    if (before === 'P3' && game.phase !== 'P3') stopMetro();
+    dispatchKey(k, true);
   });
   document.addEventListener('keyup', function (e) {
-    if (e.key === 'b' || e.key === 'B') game.handleKey('B', performance.now(), false);
+    if (e.key === 'b' || e.key === 'B') dispatchKey('B', false);
   });
+
+  /* ---------- 触屏虚拟按键（手机 / 平板） ---------- */
+  var touchBar = document.getElementById('touchbar');
+  var IS_TOUCH = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+  var tbtns = touchBar ? touchBar.querySelectorAll('.tbtn') : [];
+  /* 各阶段需要亮出的按键：随流程自动切换 */
+  var PHASE_KEYS = {
+    TITLE:  ['Enter'],
+    P1:     ['F'],
+    P2:     ['1', '2'],
+    P3:     ['Space'],
+    P4:     ['B'],
+    P5:     ['Enter', '1', '2', 'Space'],
+    RESULT: ['R']
+  };
+  if (IS_TOUCH && touchBar) {
+    document.body.classList.add('touch');
+    Array.prototype.forEach.call(tbtns, function (btn) {
+      var k = btn.getAttribute('data-key');
+      function down(e) { if (e) e.preventDefault(); btn.classList.add('active'); dispatchKey(k, true); }
+      function up(e)   { if (e) e.preventDefault(); btn.classList.remove('active'); dispatchKey(k, false); }
+      btn.addEventListener('touchstart',  down, { passive: false });
+      btn.addEventListener('touchend',    up,   { passive: false });
+      btn.addEventListener('touchcancel', up,   { passive: false });
+      /* 兼容触屏笔电 / 模拟器上的鼠标点击 */
+      btn.addEventListener('mousedown',  down);
+      btn.addEventListener('mouseup',    up);
+      btn.addEventListener('mouseleave', up);
+    });
+  }
+  var lastPhase = null;
+  function updateTouchbar() {
+    if (!IS_TOUCH || !touchBar) return;
+    var keys = PHASE_KEYS[game.phase] || [];
+    Array.prototype.forEach.call(tbtns, function (btn) {
+      btn.style.display = keys.indexOf(btn.getAttribute('data-key')) !== -1 ? '' : 'none';
+    });
+  }
 
   /* ---------- 通用绘制工具 ---------- */
   function rr(x, y, w, h, r) {           // 圆角矩形路径
@@ -684,6 +726,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     acc += wall;
     if (acc > 200) acc = 200;
     while (acc >= CONFIG.STEP) { game.update(CONFIG.STEP); acc -= CONFIG.STEP; }
+    if (game.phase !== lastPhase) { lastPhase = game.phase; updateTouchbar(); }
 
     bg();
     if (game.phase === 'TITLE') drawTitle();

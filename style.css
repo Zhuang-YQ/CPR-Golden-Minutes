@@ -7,6 +7,7 @@ body {
   min-height: 100vh;
   margin: 0;
   font-family: "Microsoft YaHei", sans-serif;
+  touch-action: manipulation;
 }
 #wrap { text-align: center; }
 canvas {
@@ -19,3 +20,42 @@ canvas {
   box-shadow: 0 12px 40px rgba(0,0,0,.55);
 }
 .foot { color: #6b7280; font-size: 13px; margin-top: 10px; }
+
+/* ---------- 触屏虚拟按键（仅触屏设备显示，按阶段自动换按钮） ---------- */
+#touchbar { display: none; }
+body.touch #touchbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 12px;
+  padding: 0 6px;
+}
+.tbtn {
+  flex: 1 1 28%;
+  min-width: 88px;
+  max-width: 220px;
+  height: 54px;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: bold;
+  color: #e5e7eb;
+  background: #2e3448;
+  border: 1px solid #3b4252;
+  border-radius: 12px;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  outline: none;
+}
+.tbtn.active {
+  background: #f5c542;
+  border-color: #f5c542;
+  color: #1a1c22;
+}
+/* 手机上画布占满宽度、按钮放大 */
+@media (max-width: 640px) {
+  .foot { font-size: 11px; padding: 0 12px; }
+  .tbtn { height: 58px; font-size: 16px; }
+}
