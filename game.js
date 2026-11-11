@@ -85,7 +85,7 @@ CPRGame.prototype.reset = function () {
 CPRGame.prototype._setHint = function () {
   if (!CONFIG.tutorialMode) { this.hint = ''; return; }
   var h = {
-    TITLE: '按 Enter 开始 · 全程键盘操作',
+    TITLE: '按 Enter 开始（手机：点屏幕下方按钮）',
     P1: '真实急救：拍打双肩、大声呼唤，确认有无反应。快速！黄金时间不等人。',
     P2: '真实急救：指定具体的人打 120、取 AED，施救者不能离开伤员。',
     P3: '真实急救：按压频率 100~120 次/分。跟着节拍按空格，节奏准才有效！',
@@ -446,6 +446,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     }
   }
   var prevJudg = 0;
+  var comboBest = 0;          // 本局最佳连准（渲染层统计，不参与评分）
+  var toast = null;           // 里程碑鼓励飘字 {at, text}
+  var prevPress = 0;
 
   /* ---------- 各阶段画面 ---------- */
   function drawTitle() {
@@ -456,9 +459,11 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     ctx.save(); ctx.globalAlpha = .9;
     txt('CPR · 心肺复苏节拍训练游戏', W / 2, 112, 14, PALETTE.text);
     ctx.restore();
-    txt('心脏骤停后，每延迟 1 分钟，存活率下降 7%~10%', W / 2, 168, 11.5, PALETTE.dim);
+    txt('怎么玩：跟着屏幕提示，依次完成 5 步急救，把伤员救回来', W / 2, 136, 11.5, PALETTE.text);
+    txt('电脑按键盘 · 手机点屏幕下方按钮', W / 2, 152, 10, PALETTE.dim, 'center', false);
+    txt('心脏骤停后，每延迟 1 分钟，存活率下降 7%~10%', W / 2, 172, 11.5, PALETTE.dim);
     // 三步口诀
-    var steps = [['叫', '判断 · 呼救'], ['压', '按压 100~120/分'], ['电', 'AED 除颤']];
+    var steps = [['叫', '判断 · 呼救', '3 秒内完成'], ['压', '按压 100~120', '每轮 30 次'], ['电', 'AED 除颤', '开机→贴片→电击']];
     for (var i = 0; i < 3; i++) {
       var x = W / 2 - 132 + i * 132;
       panel(x, 186, 108, 52, PALETTE.panel, PALETTE.line);
@@ -466,8 +471,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
       ctx.fillStyle = [PALETTE.blue, PALETTE.red, PALETTE.gold][i];
       ctx.fill();
       txt(steps[i][0], x + 30, 217, 16, PALETTE.white);
-      txt(steps[i][1], x + 74, 209, 10.5, PALETTE.text, 'center');
-      txt('30 次按压', x + 74, 224, 8.5, PALETTE.dim, 'center', false);
+      txt(steps[i][1], x + 74, 209, 10, PALETTE.text, 'center');
+      txt(steps[i][2], x + 74, 224, 8.5, PALETTE.dim, 'center', false);
     }
     var pulse = 0.5 + 0.5 * Math.sin(Date.now() / 350);
     ctx.globalAlpha = 0.55 + 0.45 * pulse;
@@ -550,6 +555,32 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
       else if (game.judgments[i] === 'GOOD') gd++; else ms++;
     }
     txt('PERFECT ' + pf + '   GOOD ' + gd + '   偏差 ' + ms, cx, 168, 10.5, PALETTE.dim, 'center', false);
+    // 连准计数（连续 PERFECT）：≥3 时金色跳动显示
+    var combo = 0;
+    for (var ci = game.judgments.length - 1; ci >= 0; ci--) {
+      if (game.judgments[ci] === 'PERFECT') combo++; else break;
+    }
+    if (combo > comboBest) comboBest = combo;
+    if (combo >= 3) {
+      var cpulse = 0.5 + 0.5 * Math.sin(Date.now() / 180);
+      ctx.save();
+      ctx.globalAlpha = 0.7 + 0.3 * cpulse;
+      txt('连准 ×' + combo, cx + 96, cy - 40, 13, PALETTE.gold);
+      ctx.restore();
+      if (combo % 5 === 0 && game.judgments.length !== prevJudg) spawnBurst(cx, cy, PALETTE.gold, 18);
+    }
+    // 里程碑鼓励：每 10 次按压飘字
+    if (game.pressCount !== prevPress) {
+      if (game.pressCount > 0 && game.pressCount % 10 === 0 && game.pressCount < CONFIG.PRESSES_PER_ROUND) {
+        toast = { at: game.clock, text: game.pressCount + ' 次 · 节奏稳，继续！' };
+      }
+      prevPress = game.pressCount;
+    }
+    if (toast && game.clock - toast.at < 900) {
+      ctx.globalAlpha = Math.min(1, (900 - (game.clock - toast.at)) / 300);
+      txt(toast.text, W / 2, 72, 12.5, PALETTE.gold);
+      ctx.globalAlpha = 1;
+    }
     // 分段进度（30 格）
     var total = CONFIG.PRESSES_PER_ROUND, done = game.pressCount;
     for (var s = 0; s < total; s++) {
@@ -645,7 +676,17 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   function drawResult() {
     if (!game.result) return;
     var sc = game.result.score, r = game.result;
-    txt('抢救结束 · 评分', W / 2, 52, 20, PALETTE.text);
+    txt('抢救结束', W / 2, 50, 18, PALETTE.text);
+    /* 结局叙事：等级决定伤员的命运 */
+    var GRADE_MSG = {
+      S: '自主循环恢复（ROSC）· 伤员恢复呼吸！',
+      A: '抢救成功 · 伤员恢复了呼吸！',
+      B: '抢救有效 · 伤员恢复部分循环，等待专业救援',
+      C: '抢救不足 · 伤员仍在危险中，再来一次！'
+    };
+    var gmCol = sc.grade === 'S' ? PALETTE.gold : sc.grade === 'A' ? PALETTE.green : sc.grade === 'B' ? PALETTE.blue : PALETTE.red;
+    txt(GRADE_MSG[sc.grade] || '', W / 2, 68, 11.5, gmCol);
+    if (comboBest >= 5) txt('本局最佳连准 ×' + comboBest, W / 2, 168, 9.5, PALETTE.dim, 'center', false);
     // 等级徽章
     var gcx = W / 2, gcy = 116;
     var gcol = sc.grade === 'S' ? PALETTE.gold : sc.grade === 'A' ? PALETTE.green : sc.grade === 'B' ? PALETTE.blue : PALETTE.red;
@@ -711,9 +752,17 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     ctx.bezierCurveTo(32, 10, 22, 10, 22, 18);
     ctx.fill();
     txt('黄金四分钟', 44, 20, 12, PALETTE.text, 'left');
-    txt('成人 CPR 节拍训练', 132, 20, 9.5, PALETTE.dim, 'left', false);
-    if (game.phase !== 'TITLE' && game.phase !== 'RESULT') {
-      txt('第 ' + game.round + ' / ' + CONFIG.ROUNDS + ' 轮', W - 14, 20, 11, PALETTE.text, 'right');
+    /* 标题页显示副标题；游戏中显示五步进度（当前步金色高亮） */
+    if (game.phase === 'TITLE' || game.phase === 'RESULT') {
+      txt('成人 CPR 节拍训练', 132, 20, 9.5, PALETTE.dim, 'left', false);
+    } else {
+      var order = ['P1', 'P2', 'P3', 'P4', 'P5'];
+      var labels = { P1: '判断', P2: '呼救', P3: '按压', P4: '吹气', P5: 'AED' };
+      for (var i = 0; i < order.length; i++) {
+        var cur = game.phase === order[i];
+        txt(String(i + 1) + ' ' + labels[order[i]], 196 + i * 52, 20, 9, cur ? PALETTE.gold : PALETTE.dim, 'center', cur);
+      }
+      txt(game.round + '/' + CONFIG.ROUNDS + ' 轮', W - 14, 20, 10, PALETTE.dim, 'right', false);
     }
   }
 
@@ -726,7 +775,11 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     acc += wall;
     if (acc > 200) acc = 200;
     while (acc >= CONFIG.STEP) { game.update(CONFIG.STEP); acc -= CONFIG.STEP; }
-    if (game.phase !== lastPhase) { lastPhase = game.phase; updateTouchbar(); }
+    if (game.phase !== lastPhase) {
+      if (game.phase === 'TITLE') { comboBest = 0; toast = null; prevPress = 0; prevJudg = 0; }
+      lastPhase = game.phase;
+      updateTouchbar();
+    }
 
     bg();
     if (game.phase === 'TITLE') drawTitle();
